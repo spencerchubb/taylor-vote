@@ -23,6 +23,9 @@ type Song struct {
 
 type Songs map[string]Song
 
+var songs Songs
+var voteCounter int
+
 func calculateExpectedScore(rating1 int, rating2 int) float64 {
 	return 1 / (1 + math.Pow(10, float64((rating2-rating1)/400)))
 }
@@ -65,8 +68,36 @@ func loadSongs() Songs {
 		songs[song.Song] = song
 	}
 
-	fmt.Println("Songs loaded")
 	return songs
+}
+
+func loadVoteCounter() int {
+	var votes int
+
+	fmt.Println("Loading vote counter...")
+
+	// Open the sqlite3 database
+	db, err := sql.Open("sqlite3", "db.db")
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer db.Close()
+
+	// Query the database
+	rows, err := db.Query("SELECT Count FROM counters WHERE Key = 'votes'")
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// Iterate over the rows
+	for rows.Next() {
+		err = rows.Scan(&votes)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
+	return votes
 }
 
 func getPairOfSongs(songs Songs) (Song, Song) {
@@ -93,7 +124,7 @@ func getPairOfSongs(songs Songs) (Song, Song) {
 	return song1, song2
 }
 
-func handlerRoot(w http.ResponseWriter, r *http.Request, songs Songs) {
+func handlerRoot(w http.ResponseWriter, r *http.Request) {
 	song1, song2 := getPairOfSongs(songs)
 
 	htmlTemplate := `
@@ -197,7 +228,7 @@ func handlerRoot(w http.ResponseWriter, r *http.Request, songs Songs) {
 		</p>
 		<h2 style="max-width: 600px; margin: 1em auto;">How does this site work?</h2>
 		<p style="max-width: 600px; margin: 1em auto;">
-			The goal of this site is to rank <span style="font-style: italic;">all</span> of Taylor Swift's songs and albums.
+			The goal of this site is to rank <span style="font-style: italic;">all</span> of Taylor Swift's songs.
 			We want to find out: What are her best songs according to Swifties? What are her worst?
 		</p>
 		<p style="max-width: 600px; margin: 1em auto;">
@@ -291,7 +322,7 @@ func handlerRoot(w http.ResponseWriter, r *http.Request, songs Songs) {
 	}
 }
 
-func handlerVote(w http.ResponseWriter, r *http.Request, songs Songs) {
+func handlerVote(w http.ResponseWriter, r *http.Request) {
 	body := map[string]interface{}{}
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
@@ -331,6 +362,9 @@ func handlerVote(w http.ResponseWriter, r *http.Request, songs Songs) {
 		fmt.Println(err)
 	}
 
+	// Increment votes in memory
+	voteCounter++
+
 	// Increment votes in counters table
 	_, err = db.Exec("UPDATE counters SET Count = Count + 1 WHERE Key = 'votes'")
 	if err != nil {
@@ -345,7 +379,7 @@ func handlerVote(w http.ResponseWriter, r *http.Request, songs Songs) {
 	})
 }
 
-func handlerLeaderboard(w http.ResponseWriter, r *http.Request, songs Songs) {
+func handlerLeaderboard(w http.ResponseWriter, r *http.Request) {
 	type RankedSong struct {
 		Rank   int
 		Song   string
@@ -427,13 +461,16 @@ func handlerLeaderboard(w http.ResponseWriter, r *http.Request, songs Songs) {
 	<body>
 		<a class="link-button" href="/">Start Voting!</a>
 		<h1>Leaderboard</h1>
+		<p style="text-align: center;">
+			Swifties have cast <span id="votes-cast">{{.voteCounter}}</span> votes total
+		</p>
 		<table>
 			<tr>
 				<th>Rank</th>
 				<th>Song</th>
 				<th>Rating</th>
 			</tr>
-			{{range $song := .}}
+			{{range $song := .rankedSongs}}
 			<tr>
 				<td>{{$song.Rank}}</td>
 				<td>{{$song.Song}}</td>
@@ -452,7 +489,10 @@ func handlerLeaderboard(w http.ResponseWriter, r *http.Request, songs Songs) {
 		return
 	}
 
-	err = tmpl.Execute(w, rankedSongs)
+	err = tmpl.Execute(w, map[string]interface{}{
+		"rankedSongs": rankedSongs,
+		"voteCounter": voteCounter,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -460,17 +500,12 @@ func handlerLeaderboard(w http.ResponseWriter, r *http.Request, songs Songs) {
 }
 
 func main() {
-	songs := loadSongs()
+	songs = loadSongs()
+	voteCounter = loadVoteCounter()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		handlerRoot(w, r, songs)
-	})
-	http.HandleFunc("/vote", func(w http.ResponseWriter, r *http.Request) {
-		handlerVote(w, r, songs)
-	})
-	http.HandleFunc("/leaderboard", func(w http.ResponseWriter, r *http.Request) {
-		handlerLeaderboard(w, r, songs)
-	})
+	http.HandleFunc("/", handlerRoot)
+	http.HandleFunc("/vote", handlerVote)
+	http.HandleFunc("/leaderboard", handlerLeaderboard)
 	http.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		// Do nothing.
 		// This is to prevent the server from logging requests twice.
