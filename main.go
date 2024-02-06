@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	"os"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -512,5 +513,19 @@ func main() {
 	})
 	port := ":8080"
 	fmt.Printf("Starting server on port %s...\n", port)
+
+	certFile := "/etc/letsencrypt/live/swifties.dev/fullchain.pem"
+	keyFile := "/etc/letsencrypt/live/swifties.dev/privkey.pem"
+
+	// If certFile and keyFile exist, use ListenAndServeTLS
+	if _, err := os.Stat(certFile); err == nil {
+		if _, err := os.Stat(keyFile); err == nil {
+			fmt.Println("Using HTTPS")
+			http.ListenAndServeTLS(port, certFile, keyFile, nil)
+		}
+	}
+
+	// Otherwise, use ListenAndServe
+	fmt.Println("Using HTTP")
 	http.ListenAndServe(port, nil)
 }
